@@ -19,6 +19,8 @@ documents those changes that are of interest to users and administrators.
  -- sched/backfill - Make hetjobs sensitive to bf_max_job_start.
  -- Fix slurmctld segfault due to job's partition pointer NULL dereference.
  -- Verify job is pending add/removing accrual time.
+ -- Don't abort when the job doesn't have an association that was removed
+    before the job was able to make it to the database.
 
 * Changes in Slurm 18.08.6-2
 ============================

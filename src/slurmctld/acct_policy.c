@@ -4148,7 +4148,8 @@ extern int acct_policy_handle_accrue_time(struct job_record *job_ptr,
 
 	assoc_ptr = job_ptr->assoc_ptr;
 	if (!assoc_ptr) {
-		fatal_abort("%s: no assoc_ptr", __func__);
+		debug("%s: no assoc_ptr, this usually means the association was removed right after the job was started, but didn't make it to the database before it was removed.",
+		      __func__);
 		return SLURM_ERROR;
 	}
 
@@ -4387,7 +4388,8 @@ extern void acct_policy_add_accrue_time(struct job_record *job_ptr,
 
 	assoc_ptr = job_ptr->assoc_ptr;
 	if (!assoc_ptr) {
-		fatal_abort("%s: no assoc_ptr", __func__);
+		debug("%s: no assoc_ptr, this usually means the association was removed right after the job was started, but didn't make it to the database before it was removed.",
+		      __func__);
 		return;
 	}
 
@@ -4461,7 +4463,8 @@ extern void acct_policy_remove_accrue_time(struct job_record *job_ptr,
 
 	assoc_ptr = job_ptr->assoc_ptr;
 	if (!assoc_ptr) {
-		fatal_abort("%s: no assoc_ptr", __func__);
+		debug("%s: no assoc_ptr, this usually means the association was removed right after the job was started, but didn't make it to the database before it was removed.",
+		      __func__);
 		goto end_it;
 	}
 
@@ -4527,7 +4530,8 @@ extern uint32_t acct_policy_get_prio_thresh(struct job_record *job_ptr,
 
 	assoc_ptr = job_ptr->assoc_ptr;
 	if (!assoc_ptr) {
-		fatal_abort("%s: no assoc_ptr", __func__);
+		debug("%s: no assoc_ptr, this usually means the association was removed right after the job was started, but didn't make it to the database before it was removed.",
+		      __func__);
 		return 0;
 	}
 
