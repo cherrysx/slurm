@@ -1,0 +1,343 @@
+#!/usr/bin/env expect
+############################################################################
+# Purpose: Test of Slurm functionality
+#          sacctmgr create qos/account job and then delete account/qos
+#
+# Output:  "TEST: #.#" followed by "SUCCESS" if test was successful, OR
+#          "FAILURE: ..." otherwise with an explanation of the failure, OR
+#          anything else indicates a failure mode that must be investigated.
+############################################################################
+# Copyright (C) 2019 SchedMD LLC.
+# Written by Nathan Rini <nate@schedmd.com>
+# All rights reserved.
+#
+# This file is part of Slurm, a resource management program.
+# For details, see <https://slurm.schedmd.com/>.
+# Please also read the included file: DISCLAIMER.
+#
+# Slurm is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation; either version 2 of the License, or (at your option)
+# any later version.
+#
+# Slurm is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along
+# with Slurm; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA.
+############################################################################
+source ./globals
+source ./globals_accounting
+
+set test_id     "21.39"
+
+set ta1		"test$test_id-account.1"
+set ta2		"test$test_id-account.2"
+set ta3		"test$test_id-account.3"
+set tu1     [get_my_user_name]
+set tq1     "test$test_id-qos.1"
+set tq2     "test$test_id-qos.2"
+
+# account options
+array set acct_1 {}
+set acct(Organization)  "Account_Org_A1"
+set acct(Description)   "Test_Account_A1"
+set acct(Qos) $tq1
+array set acct_2 {}
+set acct(Organization)  "Account_Org_A2"
+set acct(Description)   "Test_Account_A2"
+array set acct_3 {}
+set acct(Organization)  "Account_Org_A3"
+set acct(Description)   "Test_Account_A3"
+
+# user options
+array set user_req_1 {}
+set user_req_1(Account) $ta1
+array set user_req_2 {}
+set user_req_2(Account) $ta2
+set user_req_2(Qos) $tq1
+array set user_req_3 {}
+set user_req_3(Account) $ta3
+
+# qos options
+array set qos_1 {}
+set qos_1(MaxSubmitJobs) 100
+set qos_1(Description)   "test qos 1"
+array set qos_2 {}
+set qos_1(MaxSubmitJobs) 0
+set qos_1(Description)   "test qos 2"
+
+set access_err  0
+
+print_header $test_id
+
+proc check_rc { exit_code } {
+	if {$exit_code != 0} {
+		send_user "\nFAILURE: exiting with exit code $exit_code\n"
+		exit $exit_code
+	}
+}
+
+#Create test assoc and accounts
+proc create_accounts {} {
+	global ta1 ta2 ta3 tq1 tq2 tu1 acct_1 acct_2 user_req_1 user_req_2
+	global user_req_3 qos_1 qos_2
+	send_user "create account and QOS\n"
+
+	#Create test assoc and accounts
+	check_rc [add_qos $tq1 [array get qos_1]]
+	check_rc [add_qos $tq2 [array get qos_2]]
+	check_rc [add_acct $ta1 [array get acct_1]]
+	check_rc [add_acct $ta2 [array get acct_2]]
+	check_rc [add_acct $ta3 [array get acct_3]]
+	check_rc [add_user $tu1 [array get user_req_1]]
+	check_rc [add_user $tu1 [array get user_req_2]]
+	check_rc [add_user $tu1 [array get user_req_3]]
+}
+
+#Cleanup test assoc and accounts
+proc cleanup_accounts {} {
+	global ta1 ta2 ta3 tq1 tq2 tu1 acct_1 acct_2
+	send_user "remove QOS: $tq1\n"
+	remove_qos $tq1
+	remove_qos $tq2
+
+	send_user "remove user: $tu1\n"
+	remove_user "" "$ta1" "$tu1"
+	remove_user "" "$ta2" "$tu1"
+	remove_user "" "$ta3" "$tu1"
+
+	send_user "remove account: $ta1\n"
+	remove_acct "" $ta1
+	send_user "remove account: $ta2\n"
+	remove_acct "" $ta2
+	send_user "remove account: $ta3\n"
+	remove_acct "" $ta3
+}
+
+proc endit { exit_code } {
+	global test_id
+	cleanup_accounts
+	if {$exit_code == 0} {
+		print_success $test_id
+	} else {
+		send_user "\nFAILURE: exiting with exit code $exit_code\n"
+	}
+	exit $exit_code
+}
+
+proc test_sbatch { args } {
+	global sbatch number ta1 ta2 ta3 tq1 tq2
+
+	set rc -12345
+	set job_id 0
+	set command ""
+
+	foreach arg $args {
+		set command "$command $arg"
+	}
+
+	set my_pid [eval spawn $sbatch --output=none --error=none $command]
+	expect {
+		-re "Submitted batch job ($number)" {
+			set job_id $expect_out(1,string)
+			exp_continue
+		}
+		-re "error" {
+			log_warn "sbatch job was not submitted"
+			endit 1
+		}
+		timeout {
+			log_error "sbatch not responding"
+			endit 1
+		}
+		eof {
+			lassign [wait] pid spawnid os_error_flag rc
+		}
+	}
+
+	if { $job_id == 0 } {
+		log_error "batch submit failure"
+		endit 1
+	}
+
+	return $job_id
+}
+
+proc cancel_job_or_die { job_id } {
+	set rc [cancel_job $job_id]
+	if { $rc != 0 } {
+		log_error "Unable to cancel job $job_id."
+		endit $rc
+	}
+}
+
+proc check_job_reason { job_id why } {
+	global scontrol alpha_numeric
+
+	set found_reason 0
+	set found_accrue_time 0
+
+	spawn $scontrol show job $job_id
+	expect {
+		-re "Reason=($alpha_numeric)" {
+			foreach iwhy $why {
+				if { $expect_out(1,string) == $iwhy } {
+					set found_reason 1
+				}
+			}
+			if { $found_reason == 0} {
+				set whylist [join $why " or "]
+				log_error "scontrol returned Reason=$expect_out(1,string) instead of Reason=$whylist"
+				endit 1
+			}
+			exp_continue
+		}
+		#Accrue Time should always be reset
+		-re "AccrueTime=($alpha_numeric)" {
+			if { $expect_out(1,string) == "Unknown" } {
+				set found_accrue_time 1
+			} else {
+				log_error "scontrol returned AccrueTime=$expect_out(1,string) instead of AccrueTime=Unknown"
+				endit 1
+			}
+			exp_continue
+		}
+		timeout {
+			log_error "scontrol not responding"
+			endit 1
+		}
+		eof {
+			lassign [wait] pid spawnid os_error_flag rc
+		}
+	}
+
+	if {$found_reason == 0 || $found_accrue_time == 0} {
+		log_error "scontrol did not return Reason="
+		endit 1
+	}
+}
+
+#
+# Run single test job for account
+# Sets up all accounting and cleans it up per job
+# This is required to hit the update window otherwise
+# qos changes will get rejected
+#
+proc run_test_single_acct { args why} {
+	global ta1 ta2 tq1 ta3 scontrol
+	cleanup_accounts
+	create_accounts
+	set job_id [test_sbatch $args]
+	remove_acct "" $ta1
+	after 5010
+	check_job_reason $job_id $why
+	spawn $scontrol update jobid=$job_id account=$ta3
+	after 5010
+	check_job_reason $job_id [list "Priority" "Resources" "None"]
+	cancel_job_or_die $job_id
+}
+
+#
+# Run single test job for qos
+# Sets up all accounting and cleans it up per job
+# This is required to hit the update window otherwise
+# qos changes will get rejected
+#
+proc run_test_single_qos { args why} {
+	global ta1 ta2 tq1 tq2 ta3 scontrol
+	cleanup_accounts
+	create_accounts
+	set job_id [test_sbatch $args]
+	remove_qos $tq1
+	after 5010
+	check_job_reason $job_id $why
+	spawn $scontrol update jobid=$job_id qos=$tq2
+	after 5010
+	check_job_reason $job_id [list "Priority" "Resources" "None"]
+	cancel_job_or_die $job_id
+}
+
+#
+# Check accounting config and bail if not found.
+#
+if { [test_account_storage] == 0 } {
+	send_user "\nWARNING: This test can't be run without a usable AccountStorageType\n"
+	exit 0
+}
+
+if { [string compare [check_accounting_admin_level] "Administrator"] } {
+	send_user "\nWARNING: This test can't be run without being an Accounting administrator.\nUse: sacctmgr mod user \$USER set admin=admin.\n"
+	exit 0
+}
+
+cleanup_accounts
+create_accounts
+
+#Create filler job that will keep the system busy
+#We dont want the test jobs to leave pending state
+set job_id_filler [test_sbatch {--array=1-999 -N1-999 --output=none --error=none --wrap "sleep 10000"}]
+
+#Load test jobs against test account of each job type
+set job_id_1 [test_sbatch {--account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_2 [test_sbatch {--account $ta1 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_3 [test_sbatch {--account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
+set job_id_4 [test_sbatch {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_5 [test_sbatch {--qos $tq1 --account $ta2 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_6 [test_sbatch {--qos $tq1 --account $ta2 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
+
+#remove test acct and qos
+remove_acct "" $ta1
+remove_qos $tq1
+
+#Verify jobs died due to Account or QOS
+check_job_reason $job_id_1 [list "InvalidAccount"]
+check_job_reason $job_id_2 [list "InvalidAccount"]
+check_job_reason $job_id_3 [list "InvalidAccount"]
+check_job_reason $job_id_4 [list "InvalidQOS"]
+check_job_reason $job_id_5 [list "InvalidQOS"]
+check_job_reason $job_id_6 [list "InvalidQOS"]
+
+#Update jobs to make them runnable
+spawn $scontrol update jobid=$job_id_1 account=$ta3
+spawn $scontrol update jobid=$job_id_2 account=$ta3
+spawn $scontrol update jobid=$job_id_3 account=$ta3
+spawn $scontrol update jobid=$job_id_4 qos=$tq2
+spawn $scontrol update jobid=$job_id_5 qos=$tq2
+spawn $scontrol update jobid=$job_id_6 qos=$tq2
+
+#Give slurm some time to process
+after 5010
+
+#Kill test jobs
+check_job_reason $job_id_1 [list "Priority" "None"]
+check_job_reason $job_id_2 [list "Priority" "None"]
+check_job_reason $job_id_3 [list "Priority" "None"]
+check_job_reason $job_id_4 [list "Priority" "None"]
+check_job_reason $job_id_5 [list "Priority" "None"]
+check_job_reason $job_id_6 [list "Priority" "None"]
+
+#cleanup jobs
+cancel_job_or_die $job_id_1
+cancel_job_or_die $job_id_2
+cancel_job_or_die $job_id_3
+cancel_job_or_die $job_id_4
+cancel_job_or_die $job_id_5
+cancel_job_or_die $job_id_6
+cancel_job_or_die $job_id_filler
+
+#Run single job tests
+send_user "Testing Single job account removal"
+run_test_single_acct {--account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+run_test_single_acct {--account $ta1 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+run_test_single_acct {--account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+
+send_user "Testing Single job qos removal"
+run_test_single_qos {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
+run_test_single_qos {--qos $tq1 --account $ta2 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
+run_test_single_qos {--qos $tq1 --account $ta2 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
+
+endit 0
