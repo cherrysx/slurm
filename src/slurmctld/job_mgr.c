@@ -13348,7 +13348,7 @@ static int _update_job(struct job_record *job_ptr, job_desc_msg_t * job_specs,
 			error_code = ESLURM_REQUESTED_PART_CONFIG_UNAVAILABLE;
 
 		if (error_code != SLURM_SUCCESS) {
-			if (reset_reason ||
+			if (reset_reason &&
 			    ((job_ptr->state_reason != WAIT_HELD) &&
 			     (job_ptr->state_reason != WAIT_HELD_USER) &&
 			     (job_ptr->state_reason != WAIT_RESV_DELETED))) {
@@ -13357,7 +13357,7 @@ static int _update_job(struct job_record *job_ptr, job_desc_msg_t * job_specs,
 			}
 			goto fini;
 		}
-	} else if (reset_reason ||
+	} else if (reset_reason &&
 		   ((job_ptr->state_reason != WAIT_HELD)
 		    && (job_ptr->state_reason != WAIT_HELD_USER)
 		    && (job_ptr->state_reason != WAIT_RESV_DELETED)
