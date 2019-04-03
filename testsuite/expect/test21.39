@@ -56,18 +56,20 @@ set acct(Description)   "Test_Account_A3"
 # user options
 array set user_req_1 {}
 set user_req_1(Account) $ta1
+set user_req_1(Qos) "$tq1,$tq2"
 array set user_req_2 {}
 set user_req_2(Account) $ta2
-set user_req_2(Qos) $tq1
+set user_req_2(Qos) "$tq1,$tq2"
 array set user_req_3 {}
 set user_req_3(Account) $ta3
+set user_req_3(Qos) "$tq1,$tq2"
 
 # qos options
 array set qos_1 {}
-set qos_1(MaxSubmitJobs) 100
+set qos_1(MaxSubmitJobs) 10000
 set qos_1(Description)   "test qos 1"
 array set qos_2 {}
-set qos_1(MaxSubmitJobs) 0
+set qos_1(MaxSubmitJobs) 10000
 set qos_1(Description)   "test qos 2"
 
 set access_err  0
@@ -120,8 +122,8 @@ proc cleanup_accounts {} {
 
 proc endit { exit_code } {
 	global test_id
-	cleanup_accounts
 	if {$exit_code == 0} {
+		cleanup_accounts
 		print_success $test_id
 	} else {
 		send_user "\nFAILURE: exiting with exit code $exit_code\n"
@@ -178,47 +180,37 @@ proc cancel_job_or_die { job_id } {
 proc check_job_reason { job_id why } {
 	global scontrol alpha_numeric
 
-	set found_reason 0
-	set found_accrue_time 0
+	#wait 5 minutes max
+	set ts [expr [clock seconds] + 300]
+	set found_why ""
 
-	spawn $scontrol show job $job_id
-	expect {
-		-re "Reason=($alpha_numeric)" {
-			foreach iwhy $why {
-				if { $expect_out(1,string) == $iwhy } {
-					set found_reason 1
+	while {$ts > [clock seconds]} {
+		spawn $scontrol show job $job_id
+		expect {
+			-re "Reason=($alpha_numeric)" {
+				set found_why $expect_out(1,string)
+				foreach iwhy $why {
+					if { $found_why == $iwhy } {
+						return 0;
+					}
 				}
+				exp_continue
 			}
-			if { $found_reason == 0} {
-				set whylist [join $why " or "]
-				log_error "scontrol returned Reason=$expect_out(1,string) instead of Reason=$whylist"
+			timeout {
+				log_error "scontrol not responding"
 				endit 1
 			}
-			exp_continue
-		}
-		#Accrue Time should always be reset
-		-re "AccrueTime=($alpha_numeric)" {
-			if { $expect_out(1,string) == "Unknown" } {
-				set found_accrue_time 1
-			} else {
-				log_error "scontrol returned AccrueTime=$expect_out(1,string) instead of AccrueTime=Unknown"
-				endit 1
+			eof {
+				lassign [wait] pid spawnid os_error_flag rc
 			}
-			exp_continue
 		}
-		timeout {
-			log_error "scontrol not responding"
-			endit 1
-		}
-		eof {
-			lassign [wait] pid spawnid os_error_flag rc
-		}
+
+		after 500
 	}
 
-	if {$found_reason == 0 || $found_accrue_time == 0} {
-		log_error "scontrol did not return Reason="
-		endit 1
-	}
+	set whylist [join $why "|"]
+	log_error "scontrol returned Reason=$found_why instead of Reason=($whylist)"
+	endit 1
 }
 
 #
@@ -233,10 +225,8 @@ proc run_test_single_acct { args why} {
 	create_accounts
 	set job_id [test_sbatch $args]
 	remove_acct "" $ta1
-	after 5010
 	check_job_reason $job_id $why
 	spawn $scontrol update jobid=$job_id account=$ta3
-	after 5010
 	check_job_reason $job_id [list "Priority" "Resources" "None"]
 	cancel_job_or_die $job_id
 }
@@ -253,10 +243,8 @@ proc run_test_single_qos { args why} {
 	create_accounts
 	set job_id [test_sbatch $args]
 	remove_qos $tq1
-	after 5010
 	check_job_reason $job_id $why
 	spawn $scontrol update jobid=$job_id qos=$tq2
-	after 5010
 	check_job_reason $job_id [list "Priority" "Resources" "None"]
 	cancel_job_or_die $job_id
 }
@@ -279,12 +267,12 @@ create_accounts
 
 #Create filler job that will keep the system busy
 #We dont want the test jobs to leave pending state
-set job_id_filler [test_sbatch {--array=1-999 -N1-999 --output=none --error=none --wrap "sleep 10000"}]
+set job_id_filler [test_sbatch {--qos $tq2 --account $ta3 --exclusive --array=1-999 -N1-999 --output=none --error=none --wrap "sleep 10000"}]
 
 #Load test jobs against test account of each job type
-set job_id_1 [test_sbatch {--account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_2 [test_sbatch {--account $ta1 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_3 [test_sbatch {--account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
+set job_id_1 [test_sbatch {--qos $tq2 --account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_2 [test_sbatch {--qos $tq2 --account $ta1 -N1 --output=none --error=none --wrap "sleep 10"}]
+set job_id_3 [test_sbatch {--qos $tq2 --account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
 set job_id_4 [test_sbatch {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
 set job_id_5 [test_sbatch {--qos $tq1 --account $ta2 -N1 --output=none --error=none --wrap "sleep 10"}]
 set job_id_6 [test_sbatch {--qos $tq1 --account $ta2 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
@@ -309,16 +297,13 @@ spawn $scontrol update jobid=$job_id_4 qos=$tq2
 spawn $scontrol update jobid=$job_id_5 qos=$tq2
 spawn $scontrol update jobid=$job_id_6 qos=$tq2
 
-#Give slurm some time to process
-after 5010
-
 #Kill test jobs
-check_job_reason $job_id_1 [list "Priority" "None"]
-check_job_reason $job_id_2 [list "Priority" "None"]
-check_job_reason $job_id_3 [list "Priority" "None"]
-check_job_reason $job_id_4 [list "Priority" "None"]
-check_job_reason $job_id_5 [list "Priority" "None"]
-check_job_reason $job_id_6 [list "Priority" "None"]
+check_job_reason $job_id_1 [list "Priority" "Resources" "None"]
+check_job_reason $job_id_2 [list "Priority" "Resources" "None"]
+check_job_reason $job_id_3 [list "Priority" "Resources" "None"]
+check_job_reason $job_id_4 [list "Priority" "Resources" "None"]
+check_job_reason $job_id_5 [list "Priority" "Resources" "None"]
+check_job_reason $job_id_6 [list "Priority" "Resources" "None"]
 
 #cleanup jobs
 cancel_job_or_die $job_id_1
@@ -331,9 +316,9 @@ cancel_job_or_die $job_id_filler
 
 #Run single job tests
 send_user "Testing Single job account removal"
-run_test_single_acct {--account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
-run_test_single_acct {--account $ta1 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
-run_test_single_acct {--account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+run_test_single_acct {--qos $tq2 --account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+run_test_single_acct {--qos $tq2 --account $ta1 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+run_test_single_acct {--qos $tq2 --account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
 
 send_user "Testing Single job qos removal"
 run_test_single_qos {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
