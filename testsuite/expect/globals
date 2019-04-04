@@ -297,7 +297,6 @@ proc cancel_job { job_id } {
 	return [wait_for_job $job_id "DONE"]
 }
 
-
 ################################################################
 #
 # Proc: get_line_cnt
