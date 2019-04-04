@@ -725,6 +725,81 @@ proc wait_for_job { job_id desired_state } {
 
 ################################################################
 #
+# Proc: wait_for_account_done
+#
+# Purpose:  Cancel jobs on and wait for them to be finished in account(s) given,
+#           exponential back-off 1 to 10 seconds
+#
+# Returns: A non-zero return code indicates a failure.
+#
+# Input: accounts -- The Slurm account(s) we want to wait to be empty.
+#
+# NOTE: We sleep for two seconds before replying that a job is
+# done to give time for I/O completion (stdout/stderr files)
+#
+################################################################
+
+proc wait_for_account_done { accounts } {
+	global scancel squeue max_job_state_delay alpha_numeric_colon
+
+	if { $accounts == "" } {
+		log_error "wait_for_account_done: no account given"
+		return 1
+	}
+
+	log_user 0
+	set account_list [split $accounts ","]
+	foreach item $account_list {
+		spawn $scancel -A $item
+		expect {
+			timeout {
+				send_user "No response from scancel\n"
+			}
+			eof {
+				wait
+			}
+		}
+	}
+
+	set sleep_time  1
+	set my_delay    0
+	while 1 {
+		set found 0
+		spawn $squeue -o Account=%a -h -A$accounts
+		expect {
+			-re "Account=($alpha_numeric_colon)" {
+				set found 1
+				exp_continue;
+			}
+			eof {
+				wait
+			}
+		}
+
+		if { !$found } {
+			log_info "Account(s) $accounts is/are empty"
+			break;
+		}
+
+		if { $my_delay > $max_job_state_delay } {
+			log_error "Timeout waiting for account(s) '$accounts' to be finished"
+			log_user 1
+			return 1
+		}
+
+		exec sleep $sleep_time
+		set my_delay [expr $my_delay + $sleep_time]
+		set sleep_time  [expr $sleep_time * 2]
+		if { $sleep_time > 10 } {
+			set sleep_time 10
+		}
+	}
+	log_user 1
+	return 0
+}
+
+################################################################
+#
 # Proc: wait_for_step
 #
 # Purpose: Wait for a job step to be found, exponential back-off
