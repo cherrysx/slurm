@@ -271,13 +271,15 @@ static int  _write_data_array_to_file(char *file_name, char **data,
 static void _xmit_new_end_time(struct job_record *job_ptr);
 
 
-static void _job_fail_account(struct job_record *job_ptr, const char *func_name)
+static int _job_fail_account(struct job_record *job_ptr, const char *func_name)
 {
+	int rc = 0; // Return number of pending jobs held
+
 	if (IS_JOB_PENDING(job_ptr)) {
 		info("%s: %pJ ineligible due to invalid association",
 		     func_name, job_ptr);
-		xfree(job_ptr->state_desc);
 
+		xfree(job_ptr->state_desc);
 		job_ptr->state_reason = FAIL_ACCOUNT;
 
 		if (job_ptr->details) {
@@ -285,6 +287,7 @@ static void _job_fail_account(struct job_record *job_ptr, const char *func_name)
 			/* Update job with new begin_time. */
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
 		}
+		rc = 1;
 	}
 
 	/* This job is no longer eligible, so make it so. */
@@ -301,7 +304,11 @@ static void _job_fail_account(struct job_record *job_ptr, const char *func_name)
 		if (!job_ptr->db_index)
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
 
-		acct_policy_remove_accrue_time(job_ptr, false);
+		/*
+		 * Don't call acct_policy_remove_accrue_time() here, the cnt on
+		 * parent associations will be handled correctly by the removal
+		 * of the association.
+		 */
 
 		/*
 		 * Clear ptrs so that only assocation usage is removed.
@@ -324,15 +331,19 @@ static void _job_fail_account(struct job_record *job_ptr, const char *func_name)
 	}
 
 	job_ptr->assoc_id = 0;
+
+	return rc;
 }
 
-static void _job_fail_qos(struct job_record *job_ptr, const char *func_name)
+static int _job_fail_qos(struct job_record *job_ptr, const char *func_name)
 {
+	int rc = 0; // Return number of pending jobs held
+
 	if (IS_JOB_PENDING(job_ptr)) {
 		info("%s: %pJ ineligible due to invalid qos",
 		     func_name, job_ptr);
-		xfree(job_ptr->state_desc);
 
+		xfree(job_ptr->state_desc);
 		job_ptr->state_reason = FAIL_QOS;
 
 		if (job_ptr->details) {
@@ -340,6 +351,7 @@ static void _job_fail_qos(struct job_record *job_ptr, const char *func_name)
 			/* Update job with new begin_time. */
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
 		}
+		rc = 1;
 	}
 
 	/* This job is no longer eligible, so make it so. */
@@ -354,7 +366,11 @@ static void _job_fail_qos(struct job_record *job_ptr, const char *func_name)
 		if (!job_ptr->db_index)
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
 
-		acct_policy_remove_accrue_time(job_ptr, false);
+		/*
+		 * Don't call acct_policy_remove_accrue_time() here, the cnt on
+		 * parent associations will be handled correctly by the removal
+		 * of the association.
+		 */
 
 		/*
 		 * Clear ptrs so that only qos usage is removed. Otherwise
@@ -372,6 +388,8 @@ static void _job_fail_qos(struct job_record *job_ptr, const char *func_name)
 	}
 
 	job_ptr->qos_id = 0;
+
+	return rc;
 }
 
 /*
@@ -16778,8 +16796,7 @@ extern int job_hold_by_assoc_id(uint32_t assoc_id)
 		if (job_ptr->assoc_id != assoc_id)
 			continue;
 
-		_job_fail_account(job_ptr, __func__);
-		cnt++;
+		cnt += _job_fail_account(job_ptr, __func__);
 	}
 	list_iterator_destroy(job_iterator);
 	unlock_slurmctld(job_write_lock);
@@ -16814,27 +16831,7 @@ extern int job_hold_by_qos_id(uint32_t qos_id)
 		if (job_ptr->qos_id != qos_id)
 			continue;
 
-		/* move up to the parent that should still exist */
-		if (job_ptr->qos_ptr) {
-			/* Force a start so the association doesn't
-			   get lost.  Since there could be some delay
-			   in the start of the job when running with
-			   the slurmdbd.
-			*/
-			if (!job_ptr->db_index) {
-				jobacct_storage_g_job_start(acct_db_conn,
-							    job_ptr);
-			}
-			job_ptr->qos_ptr = NULL;
-		}
-
-		if (IS_JOB_FINISHED(job_ptr))
-			continue;
-
-		info("QOS deleted, holding %pJ", job_ptr);
-		xfree(job_ptr->state_desc);
-		job_ptr->state_reason = FAIL_QOS;
-		cnt++;
+		cnt += _job_fail_qos(job_ptr, __func__);
 	}
 	list_iterator_destroy(job_iterator);
 	unlock_slurmctld(job_write_lock);
