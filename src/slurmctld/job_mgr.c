@@ -283,6 +283,9 @@ static int _job_fail_account(struct job_record *job_ptr, const char *func_name)
 		job_ptr->state_reason = FAIL_ACCOUNT;
 
 		if (job_ptr->details) {
+			/* reset the job */
+			job_ptr->details->accrue_time = 0;
+			job_ptr->bit_flags &= ~JOB_ACCRUE_OVER;
 			job_ptr->details->begin_time = 0;
 			/* Update job with new begin_time. */
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
@@ -347,6 +350,9 @@ static int _job_fail_qos(struct job_record *job_ptr, const char *func_name)
 		job_ptr->state_reason = FAIL_QOS;
 
 		if (job_ptr->details) {
+			/* reset the job */
+			job_ptr->details->accrue_time = 0;
+			job_ptr->bit_flags &= ~JOB_ACCRUE_OVER;
 			job_ptr->details->begin_time = 0;
 			/* Update job with new begin_time. */
 			jobacct_storage_g_job_start(acct_db_conn, job_ptr);
