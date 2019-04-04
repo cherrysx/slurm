@@ -34,9 +34,9 @@ source ./globals_accounting
 
 set test_id     "21.39"
 
+set part_name   "test$test_id\_part"
 set ta1		"test$test_id-account.1"
 set ta2		"test$test_id-account.2"
-set ta3		"test$test_id-account.3"
 set tu1     [get_my_user_name]
 set tq1     "test$test_id-qos.1"
 set tq2     "test$test_id-qos.2"
@@ -49,9 +49,6 @@ set acct(Qos) $tq1
 array set acct_2 {}
 set acct(Organization)  "Account_Org_A2"
 set acct(Description)   "Test_Account_A2"
-array set acct_3 {}
-set acct(Organization)  "Account_Org_A3"
-set acct(Description)   "Test_Account_A3"
 
 # user options
 array set user_req_1 {}
@@ -60,16 +57,11 @@ set user_req_1(Qos) "$tq1,$tq2"
 array set user_req_2 {}
 set user_req_2(Account) $ta2
 set user_req_2(Qos) "$tq1,$tq2"
-array set user_req_3 {}
-set user_req_3(Account) $ta3
-set user_req_3(Qos) "$tq1,$tq2"
 
 # qos options
 array set qos_1 {}
-set qos_1(MaxSubmitJobs) 10000
 set qos_1(Description)   "test qos 1"
 array set qos_2 {}
-set qos_1(MaxSubmitJobs) 10000
 set qos_1(Description)   "test qos 2"
 
 set access_err  0
@@ -78,71 +70,61 @@ print_header $test_id
 
 proc check_rc { exit_code } {
 	if {$exit_code != 0} {
-		send_user "\nFAILURE: exiting with exit code $exit_code\n"
+		log_error "exiting with exit code $exit_code"
 		exit $exit_code
 	}
 }
 
 #Create test assoc and accounts
 proc create_accounts {} {
-	global ta1 ta2 ta3 tq1 tq2 tu1 acct_1 acct_2 user_req_1 user_req_2
-	global user_req_3 qos_1 qos_2
-	send_user "create account and QOS\n"
+	global ta1 ta2 tq1 tq2 tu1 user_req_1 user_req_2
+	global qos_1 qos_2
+	log_info "create account and QOS"
+
 
 	#Create test assoc and accounts
 	check_rc [add_qos $tq1 [array get qos_1]]
 	check_rc [add_qos $tq2 [array get qos_2]]
 	check_rc [add_acct $ta1 [array get acct_1]]
 	check_rc [add_acct $ta2 [array get acct_2]]
-	check_rc [add_acct $ta3 [array get acct_3]]
 	check_rc [add_user $tu1 [array get user_req_1]]
 	check_rc [add_user $tu1 [array get user_req_2]]
-	check_rc [add_user $tu1 [array get user_req_3]]
 }
 
 #Cleanup test assoc and accounts
 proc cleanup_accounts {} {
-	global ta1 ta2 ta3 tq1 tq2 tu1 acct_1 acct_2
-	send_user "remove QOS: $tq1\n"
-	remove_qos $tq1
-	remove_qos $tq2
+	global ta1 ta2 tq1 tq2
 
-	send_user "remove user: $tu1\n"
-	remove_user "" "$ta1" "$tu1"
-	remove_user "" "$ta2" "$tu1"
-	remove_user "" "$ta3" "$tu1"
+	wait_for_account_done $ta1,$ta2
 
-	send_user "remove account: $ta1\n"
-	remove_acct "" $ta1
-	send_user "remove account: $ta2\n"
-	remove_acct "" $ta2
-	send_user "remove account: $ta3\n"
-	remove_acct "" $ta3
+	log_info "remove QOS: $tq1,$tq2"
+	remove_qos $tq1,$tq2
+
+	log_info "remove account: $ta1,$ta2"
+	remove_acct "" $ta1,$ta2
 }
 
 proc endit { exit_code } {
-	global test_id
+	global test_id part_name
+
+	wait_for_part_done $part_name
+
 	if {$exit_code == 0} {
 		cleanup_accounts
 		print_success $test_id
 	} else {
-		send_user "\nFAILURE: exiting with exit code $exit_code\n"
+		log_error "exiting with exit code $exit_code"
 	}
 	exit $exit_code
 }
 
-proc test_sbatch { args } {
-	global sbatch number ta1 ta2 ta3 tq1 tq2
+proc test_sbatch { qos account num_nodes cmd } {
+	global sbatch number part_name
 
 	set rc -12345
 	set job_id 0
-	set command ""
 
-	foreach arg $args {
-		set command "$command $arg"
-	}
-
-	set my_pid [eval spawn $sbatch --output=none --error=none $command]
+	set my_pid [eval spawn $sbatch -p$part_name --output=none --error=none --exclusive -q$qos -A$account -N$num_nodes --wrap \"$cmd\"]
 	expect {
 		-re "Submitted batch job ($number)" {
 			set job_id $expect_out(1,string)
@@ -169,43 +151,43 @@ proc test_sbatch { args } {
 	return $job_id
 }
 
-proc cancel_job_or_die { job_id } {
-	set rc [cancel_job $job_id]
-	if { $rc != 0 } {
-		log_error "Unable to cancel job $job_id."
-		endit $rc
-	}
-}
+proc check_job_reason { job_id state why } {
+	global scontrol alpha_numeric alpha
 
-proc check_job_reason { job_id why } {
-	global scontrol alpha_numeric
-
-	#wait 5 minutes max
-	set ts [expr [clock seconds] + 300]
 	set found_why ""
+	set state_found ""
 
-	while {$ts > [clock seconds]} {
-		spawn $scontrol show job $job_id
-		expect {
-			-re "Reason=($alpha_numeric)" {
-				set found_why $expect_out(1,string)
-				foreach iwhy $why {
-					if { $found_why == $iwhy } {
-						return 0;
-					}
-				}
-				exp_continue
-			}
-			timeout {
-				log_error "scontrol not responding"
-				endit 1
-			}
-			eof {
-				lassign [wait] pid spawnid os_error_flag rc
-			}
+	log_user 0
+	spawn $scontrol show job $job_id
+	expect {
+		-re "State=($alpha)" {
+			set state_found $expect_out(1,string)
+			exp_continue
 		}
+		-re "Reason=($alpha_numeric)" {
+			set found_why $expect_out(1,string)
+			foreach iwhy $why {
+				if { $found_why == $iwhy } {
+					log_user 1
+					log_info "Found jobid $job_id with correct state '$state' and reason '$found_why'"
+					return 0;
+				}
+			}
+			exp_continue
+		}
+		timeout {
+			log_error "scontrol not responding"
+			endit 1
+		}
+		eof {
+			lassign [wait] pid spawnid os_error_flag rc
+		}
+	}
 
-		after 500
+	log_user 1
+	if { $state_found != $state } {
+		log_error "State found was $state_found, expected $state"
+		endit 1;
 	}
 
 	set whylist [join $why "|"]
@@ -214,115 +196,76 @@ proc check_job_reason { job_id why } {
 }
 
 #
-# Run single test job for account
-# Sets up all accounting and cleans it up per job
-# This is required to hit the update window otherwise
-# qos changes will get rejected
-#
-proc run_test_single_acct { args why} {
-	global ta1 ta2 tq1 ta3 scontrol
-	cleanup_accounts
-	create_accounts
-	set job_id [test_sbatch $args]
-	remove_acct "" $ta1
-	check_job_reason $job_id $why
-	spawn $scontrol update jobid=$job_id account=$ta3
-	check_job_reason $job_id [list "Priority" "Resources" "None"]
-	cancel_job_or_die $job_id
-}
-
-#
-# Run single test job for qos
-# Sets up all accounting and cleans it up per job
-# This is required to hit the update window otherwise
-# qos changes will get rejected
-#
-proc run_test_single_qos { args why} {
-	global ta1 ta2 tq1 tq2 ta3 scontrol
-	cleanup_accounts
-	create_accounts
-	set job_id [test_sbatch $args]
-	remove_qos $tq1
-	check_job_reason $job_id $why
-	spawn $scontrol update jobid=$job_id qos=$tq2
-	check_job_reason $job_id [list "Priority" "Resources" "None"]
-	cancel_job_or_die $job_id
-}
-
-#
 # Check accounting config and bail if not found.
 #
 if { [test_account_storage] == 0 } {
-	send_user "\nWARNING: This test can't be run without a usable AccountStorageType\n"
+	log_warn "This test can't be run without a usable AccountStorageType"
 	exit 0
 }
 
 if { [string compare [check_accounting_admin_level] "Administrator"] } {
-	send_user "\nWARNING: This test can't be run without being an Accounting administrator.\nUse: sacctmgr mod user \$USER set admin=admin.\n"
+	log_warn "This test can't be run without being an Accounting administrator.\nUse: sacctmgr mod user \$USER set admin=admin."
 	exit 0
 }
 
 cleanup_accounts
 create_accounts
 
-#Create filler job that will keep the system busy
-#We dont want the test jobs to leave pending state
-set job_id_filler [test_sbatch {--qos $tq2 --account $ta3 --exclusive --array=1-999 -N1-999 --output=none --error=none --wrap "sleep 10000"}]
+delete_part $part_name
 
-#Load test jobs against test account of each job type
-set job_id_1 [test_sbatch {--qos $tq2 --account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_2 [test_sbatch {--qos $tq2 --account $ta1 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_3 [test_sbatch {--qos $tq2 --account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
-set job_id_4 [test_sbatch {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_5 [test_sbatch {--qos $tq1 --account $ta2 -N1 --output=none --error=none --wrap "sleep 10"}]
-set job_id_6 [test_sbatch {--qos $tq1 --account $ta2 -N1 : -N2 -n2 --output=none --error=none --wrap "sleep 10"}]
+if { [create_part $part_name 1] } {
+	exit 1
+}
 
-#remove test acct and qos
+# First lets test against removing an account from a running and pending job
+# since partition only has 1 so one of these should run and the
+# second should pend
+set job_id_1 [test_sbatch $tq1 $ta1 1 "sleep 10"]
+set job_id_2 [test_sbatch $tq1 $ta1 1 "sleep 10"]
+
+#remove test acct
 remove_acct "" $ta1
-remove_qos $tq1
 
-#Verify jobs died due to Account or QOS
-check_job_reason $job_id_1 [list "InvalidAccount"]
-check_job_reason $job_id_2 [list "InvalidAccount"]
-check_job_reason $job_id_3 [list "InvalidAccount"]
-check_job_reason $job_id_4 [list "InvalidQOS"]
-check_job_reason $job_id_5 [list "InvalidQOS"]
-check_job_reason $job_id_6 [list "InvalidQOS"]
+sleep 1
+#Verify jobs died due to Account
+check_job_reason $job_id_1 "RUNNING" [list "None"]
+check_job_reason $job_id_2 "PENDING" [list "InvalidAccount"]
 
-#Update jobs to make them runnable
-spawn $scontrol update jobid=$job_id_1 account=$ta3
-spawn $scontrol update jobid=$job_id_2 account=$ta3
-spawn $scontrol update jobid=$job_id_3 account=$ta3
-spawn $scontrol update jobid=$job_id_4 qos=$tq2
-spawn $scontrol update jobid=$job_id_5 qos=$tq2
-spawn $scontrol update jobid=$job_id_6 qos=$tq2
+#Update pending job to make it runnable
+spawn $scontrol update jobid=$job_id_2 account=$ta2
 
-#Kill test jobs
-check_job_reason $job_id_1 [list "Priority" "Resources" "None"]
-check_job_reason $job_id_2 [list "Priority" "Resources" "None"]
-check_job_reason $job_id_3 [list "Priority" "Resources" "None"]
-check_job_reason $job_id_4 [list "Priority" "Resources" "None"]
-check_job_reason $job_id_5 [list "Priority" "Resources" "None"]
-check_job_reason $job_id_6 [list "Priority" "Resources" "None"]
+sleep 1
+#Check reasons after account alter
+check_job_reason $job_id_1 "RUNNING" [list "None"]
+check_job_reason $job_id_2 "PENDING" [list "Priority" "Resources" "None"]
 
 #cleanup jobs
-cancel_job_or_die $job_id_1
-cancel_job_or_die $job_id_2
-cancel_job_or_die $job_id_3
-cancel_job_or_die $job_id_4
-cancel_job_or_die $job_id_5
-cancel_job_or_die $job_id_6
-cancel_job_or_die $job_id_filler
+wait_for_part_done $part_name
 
-#Run single job tests
-send_user "Testing Single job account removal"
-run_test_single_acct {--qos $tq2 --account $ta1 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
-run_test_single_acct {--qos $tq2 --account $ta1 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
-run_test_single_acct {--qos $tq2 --account $ta1 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidAccount" "None"]
+# second lets test against a running and pending job on a qos we will remove
+# since partition only has 1 so one of these should run and the second
+# should pend
+set job_id_1 [test_sbatch $tq1 $ta2 1 "sleep 10"]
+set job_id_2 [test_sbatch $tq1 $ta2 1 "sleep 10"]
 
-send_user "Testing Single job qos removal"
-run_test_single_qos {--qos $tq1 --account $ta2 --array=1-25 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
-run_test_single_qos {--qos $tq1 --account $ta2 -N1 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
-run_test_single_qos {--qos $tq1 --account $ta2 -N1 : -N2 -n2 --output=none --error=none --wrap "/bin/sleep 99999999"} [list "InvalidQOS" "None"]
+#remove test qos
+sleep .5
+remove_qos $tq1
+
+sleep 1
+#Verify jobs died due to Account
+check_job_reason $job_id_1 "RUNNING" [list "None"]
+check_job_reason $job_id_2 "PENDING" [list "InvalidQOS"]
+
+#Update pending job to make it runnable
+spawn $scontrol update jobid=$job_id_2 qos=$tq2
+
+sleep 1
+#Check reasons after account alter
+check_job_reason $job_id_1 "RUNNING" [list "None"]
+check_job_reason $job_id_2 "PENDING" [list "Priority" "Resources" "None"]
+
+#cleanup jobs
+wait_for_part_done $part_name
 
 endit 0
